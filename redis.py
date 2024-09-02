@@ -4,6 +4,8 @@ import re
 import json
 import psycopg2
 from psycopg2.extras import Json
+import redis
+import multiprocessing as mp
 
 # Database connection details
 db_params = {
@@ -146,8 +148,8 @@ def extract_additional_metrics(soup):
         }
     return metrics
 
-def main():
-    url = 'https://vidiq.com/youtube-stats/channel/UCeVMnSShP_Iviwkknt83cww/'
+def process_channel(channel_id):
+    url = f'https://vidiq.com/youtube-stats/channel/{channel_id}/'
     response = requests.get(url)
     
     if response.status_code == 200:
@@ -182,9 +184,30 @@ def main():
             finally:
                 conn.close()
 
-        print("Data transfer to PostgreSQL completed successfully.")
+        print(f"Data transfer for {channel_id} completed successfully.")
     else:
-        print(f"Failed to retrieve the webpage. Status code: {response.status_code}")
+        print(f"Failed to retrieve the webpage for {channel_id}. Status code: {response.status_code}")
+
+def worker(redis_conn):
+    while True:
+        channel_json = redis_conn.lpop('channel_queue')
+        if channel_json is None:
+            break  # No more items in the queue
+        channel = json.loads(channel_json)
+        process_channel(channel['channelid'])
+
+def main():
+    redis_conn = redis.StrictRedis(host='localhost', port=6379, db=0)
+
+    # Create a pool of workers
+    num_processes = 4
+    pool = mp.Pool(processes=num_processes)
+
+    # Start the worker processes
+    pool.map(worker, [redis_conn] * num_processes)
+
+    pool.close()
+    pool.join()
 
 if __name__ == "__main__":
     main()
